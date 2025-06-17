@@ -1,9 +1,13 @@
 # coding=UTF-8
-# 本更新脚本以
+# 本更新脚本以GPL v3.0开源
 import os
-import subprocess
+import time
 import shutil
+import requests
+import subprocess
 from datetime import datetime
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
 # 常量
 DEFAULT_REPO_URL = "https://github.com/xinnan-tech/xiaozhi-esp32-server.git"
@@ -11,7 +15,7 @@ DEFAULT_REPO_URL = "https://github.com/xinnan-tech/xiaozhi-esp32-server.git"
 def get_github_proxy_urls():
     """返回GitHub镜像代理地址列表"""
     return [
-        "https://ghfast.top",
+        "https://ghfast.top"
         "https://gh.ddlc.top",
         "https://slink.ltd",
         "https://cors.isteed.cc",
@@ -24,7 +28,8 @@ def get_github_proxy_urls():
         "https://dl.ghpig.top",
         "https://gh-proxy.com",
         "https://hub.whtrys.space",
-        "https://gh-proxy.ygxz.in"
+        "https://gh-proxy.ygxz.in",
+        "https://ghproxy.net"
     ]
 
 def run_git_command(git_path, args):
@@ -51,22 +56,55 @@ def run_git_command(git_path, args):
             output_lines.append(cleaned)
     print("-" * 60)
     return process.poll(), '\n'.join(output_lines)
+    
 
 def select_proxy_url():
-    """用户选择代理地址"""
+    """自动选择延迟最低的GitHub代理地址"""
     proxies = get_github_proxy_urls()
-    print("\n可用GitHub代理地址：")
-    for i, url in enumerate(proxies, 1):
-        print(f"{i}. {url}")
-    while True:
-        choice = input("\n请选择代理地址编号（留空取消代理）: ").strip()
-        if not choice:
-            return None
+    print(f"\n请稍后，正在测试代理地址延迟...")
+    
+    # 配置重试策略
+    retries = Retry(total=3, backoff_factor=0.5)
+    session = requests.Session()
+    session.mount('https://', HTTPAdapter(max_retries=retries))
+    
+    proxy_latencies = {}
+    for url in proxies:
         try:
-            index = int(choice) - 1
-            return proxies[index]
-        except (ValueError, IndexError):
-            print("输入无效，请重新输入！")
+            start_time = time.time()
+            # 分步设置超时：连接3秒，读取5秒
+            response = session.head(url, timeout=(3, 5))
+            if response.status_code == 200:
+                latency = (time.time() - start_time) * 1000
+                proxy_latencies[url] = latency
+                print(f"{url}: {latency:.2f}ms")
+        except requests.exceptions.SSLError:
+            try:
+                # SSL失败时尝试不验证
+                start_time = time.time()
+                response = session.head(url, timeout=(3,5), verify=False)
+                if response.status_code == 200:
+                    latency = (time.time() - start_time) * 1000
+                    proxy_latencies[url] = latency
+                    print(f"{url}: {latency:.2f}ms (不安全连接)")
+            except Exception as e:
+                print(f"{url}: SSL失败后重试异常 ({str(e)})")
+        except requests.exceptions.Timeout:
+            print(f"{url}: 请求超时")
+        except requests.exceptions.ConnectionError:
+            print(f"{url}: 连接失败")
+        except Exception as e:
+            print(f"{url}: 未知异常 ({str(e)})")
+    
+    if not proxy_latencies:
+        print("\n所有代理地址测试失败，将不使用代理")
+        return None
+    
+    best_proxy = min(proxy_latencies.items(), key=lambda x: x[1])
+    print(f"\n已选择最低延迟代理: {best_proxy[0]} ({best_proxy[1]:.2f}ms)")
+    
+    return best_proxy[0]
+
 
 def get_pull_mode():
     """选择拉取模式"""
@@ -105,6 +143,10 @@ def backup_config(script_dir):
 def main():
     # 初始化路径
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    # 切换目录
+    grandparent_dir = os.path.dirname(os.path.dirname(script_dir))
+    os.chdir(grandparent_dir)
+    script_dir = os.getcwd()
     git_path = os.path.join(script_dir, "runtime", "git-2.48.1", "cmd", "git.exe")
     src_dir = os.path.join(script_dir, "src")
 
@@ -116,7 +158,7 @@ def main():
 
     try:
         os.chdir(src_dir)
-        print("小智AI服务端更新脚本 Ver 1.0")
+        print("小智AI服务端更新脚本 Ver 1.0\n制作者：哔哩哔哩 @香草味的纳西妲喵。\n脚本开源地址：https://github.com/VanillaNahida/xiaozhi-server-updater/")
         print(f"当前工作目录：{src_dir}")
     except Exception as e:
         print(f"[ERROR] 目录切换失败：{str(e)}")
